@@ -579,6 +579,14 @@
                     <button type="button" class="basemap-btn"        data-mode="white"  onclick="setBasemap1('white')">백색지도</button>
                     <button type="button" class="basemap-btn"        data-mode="satellite" onclick="setBasemap1('satellite')">위성지도</button>
                 </div>
+                
+                <!-- 👇 여기서부터 추가: 오염원 레이어 토글 버튼 -->
+                <div class="basemap-btn-group" id="pollution-toggle-group" style="top: 44px;" aria-label="오염원 켜기/끄기">
+                    <button type="button" id="pollution-toggle-btn" class="basemap-btn active" style="background:#e74c3c; color:#fff;" onclick="togglePollutionLayer()">
+                        <i class="fa-solid fa-droplet"></i> 오염원 표시 ON
+                    </button>
+                </div>
+                <!-- 👆 여기까지 추가 -->
                 <div class="farm-search" id="farm-search">
                     <div class="farm-search-row">
                         <input id="farm-search-input" type="text" placeholder="양식번호 입력" autocomplete="off">
