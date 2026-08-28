@@ -15,7 +15,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- Turf.js: 오염원 영향반경 해상 클리핑에 사용 -->
     <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
-    <!-- 육상 오염원 데이터 (매달 pollution_sources.js 파일만 수정하면 됩니다) -->
+    <!-- 육상 오염원 데이터 -->
     <script src="pollution_sources.js"></script>
     
     <style>
@@ -580,13 +580,13 @@
                     <button type="button" class="basemap-btn"        data-mode="satellite" onclick="setBasemap1('satellite')">위성지도</button>
                 </div>
                 
-                <!-- 👇 여기서부터 추가: 오염원 레이어 토글 버튼 -->
+                <!-- 오염원 레이어 토글 버튼 -->
                 <div class="basemap-btn-group" id="pollution-toggle-group" style="top: 44px;" aria-label="오염원 켜기/끄기">
                     <button type="button" id="pollution-toggle-btn" class="basemap-btn active" style="background:#e74c3c; color:#fff;" onclick="togglePollutionLayer()">
                         <i class="fa-solid fa-droplet"></i> 오염원 표시 ON
                     </button>
                 </div>
-                <!-- 👆 여기까지 추가 -->
+                
                 <div class="farm-search" id="farm-search">
                     <div class="farm-search-row">
                         <input id="farm-search-input" type="text" placeholder="양식번호 입력" autocomplete="off">
@@ -1178,7 +1178,7 @@
                 }
             });
 
-            // 4. 월별 굴 생산 현황 (신규 추가)
+            // 4. 월별 굴 생산 현황 
             new Chart(document.getElementById('monthlyOysterChart'), {
                 type: 'bar',
                 data: {
@@ -1307,576 +1307,450 @@
         let geoLayer = null;
         let map1inited = false;
 
-const FARMS_GEOJSON = window.AQUACULTURE_FARMS_GEOJSON;
-
-const catMeta = {
-  fish:      { label: "어류",    color: "#2e86de" },
-  shellfish: { label: "패류",    color: "#e67e22" },
-  seaweed:   { label: "해조류",  color: "#27ae60" },
-  mixed:     { label: "복합/기타", color: "#8e44ad" },
-};
-
-const farmState = { activeCats: new Set(['fish','shellfish','seaweed','mixed']) };
-
-function farmPopupHtml(p) {
-  const meta = catMeta[p.cat] || catMeta.mixed;
-  function fmtDate(ymd) {
-    if (!ymd || ymd.length !== 8) return ymd || '-';
-    return `${ymd.slice(0,4)}.${ymd.slice(4,6)}.${ymd.slice(6,8)}`;
-  }
-  return `
-    <div class="popup-farm">
-      <div class="popup-tag" style="background:${meta.color}">${meta.label}</div>
-      <div class="popup-title">${p.lcns_no || '(면허번호 미상)'}</div>
-      <div class="popup-row"><b>양식물</b><span>${p.farm_knd}</span></div>
-      <div class="popup-row"><b>어업종류</b><span>${p.fids_knd}${p.fids_mthd ? ' / ' + p.fids_mthd : ''}</span></div>
-      <div class="popup-row"><b>면적</b><span>${p.area} ha</span></div>
-      <div class="popup-row"><b>주소</b><span>${p.addr || '-'} (${p.sgg_nm || '-'})</span></div>
-      <div class="popup-row"><b>면허기간</b><span>${fmtDate(p.lcns_bgng)} ~ ${fmtDate(p.lcns_end)}</span></div>
-    </div>
-  `;
-}
-
-function rebuildFarmLayer() {
-  if (geoLayer) { map1.removeLayer(geoLayer); }
-  const canvasR = L.canvas({ padding: 0.3 });
-  geoLayer = L.geoJSON(FARMS_GEOJSON, {
-    filter: f => farmState.activeCats.has(f.properties.cat),
-    coordsToLatLng: c => L.latLng(c[1] + FARM_OFFSET.lat, c[0] + FARM_OFFSET.lng),
-    style: f => {
-      const meta = catMeta[f.properties.cat] || catMeta.mixed;
-      return { color: meta.color, weight: 1.2, fillColor: meta.color, fillOpacity: 0.4, renderer: canvasR };
-    },
-    renderer: canvasR,
-    onEachFeature: (feature, layer) => {
-      layer.bindPopup(farmPopupHtml(feature.properties));
-      layer.on('mouseover', () => layer.setStyle({ weight: 3, fillOpacity: 0.7 }));
-      layer.on('mouseout', () => geoLayer.resetStyle(layer));
-    }
-  }).addTo(map1);
-  updateFarmStats();
-}
-
-// 원본 좌표와 실제 위치 간 오차 보정값 (남북 -266m, 동서 +235m 기준으로 확정)
-const FARM_OFFSET = { lat: -0.0023963963963963965, lng: 0.002600511929058334 };
-
-function normalizeFarmNo(value) {
-  return String(value || '').trim().toLowerCase().replace(/\\s+/g, '');
-}
-
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, ch => ({
-    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
-  }[ch]));
-}
-
-function searchFarms() {
-  const input = document.getElementById('farm-search-input');
-  const resultsBox = document.getElementById('farm-search-results');
-  const query = normalizeFarmNo(input.value);
-
-  resultsBox.innerHTML = '';
-  resultsBox.classList.remove('show');
-
-  if (!query) return;
-
-  const exact = FARMS_GEOJSON.features.filter(f =>
-    normalizeFarmNo(f.properties.lcns_no) === query
-  );
-  const partial = FARMS_GEOJSON.features.filter(f => {
-    const no = normalizeFarmNo(f.properties.lcns_no);
-    return no.includes(query) && !exact.includes(f);
-  });
-  const matches = exact.concat(partial);
-
-  resultsBox.classList.add('show');
-
-  if (!matches.length) {
-    resultsBox.innerHTML = `
-      <div class="farm-search-count-row">
-        <span class="farm-search-empty" style="padding:0;">해당 양식번호를 찾을 수 없습니다.</span>
-        <button type="button" class="farm-search-close" onclick="closeFarmSearchResults()">✕ 닫기</button>
-      </div>`;
-    return;
-  }
-
-  const countText = exact.length
-    ? `정확히 일치 ${exact.length}건${partial.length ? ` · 추가 검색결과 ${partial.length}건` : ''}`
-    : `검색결과 ${matches.length}건`;
-
-  resultsBox.innerHTML = `
-    <div class="farm-search-count-row">
-      <span class="farm-search-count">${countText}</span>
-      <button type="button" class="farm-search-close" onclick="closeFarmSearchResults()">✕ 닫기</button>
-    </div>
-    ${matches.map((f, i) => {
-      const p = f.properties;
-      return `
-        <button type="button" class="farm-search-item" data-farm-index="${FARMS_GEOJSON.features.indexOf(f)}">
-          <strong>${escapeHtml(p.lcns_no || '(면허번호 미상)')}</strong>
-          <span>${escapeHtml(p.farm_knd || '-')} · ${escapeHtml(p.addr || p.sgg_nm || '-')}</span>
-        </button>`;
-    }).join('')}
-  `;
-
-  resultsBox.querySelectorAll('.farm-search-item').forEach(item => {
-    item.addEventListener('click', () => {
-      const feature = FARMS_GEOJSON.features[Number(item.dataset.farmIndex)];
-      selectFarmFeature(feature);
-      closeFarmSearchResults();
-    });
-  });
-}
-
-function closeFarmSearchResults() {
-  const resultsBox = document.getElementById('farm-search-results');
-  resultsBox.innerHTML = '';
-  resultsBox.classList.remove('show');
-}
-
-function selectFarmFeature(feature) {
-  const p = feature.properties;
-  const cat = p.cat || 'mixed';
-
-  let targetLayer = null;
-  geoLayer.eachLayer(layer => {
-    if (layer.feature === feature) targetLayer = layer;
-  });
-
-  if (!targetLayer) return;
-
-  const bounds = targetLayer.getBounds();
-  if (bounds.isValid()) {
-    map1.panTo(bounds.getCenter(), { animate: true });
-  }
-
-  setTimeout(() => {
-    targetLayer.openPopup();
-  }, 250);
-}
-
-function initFarmRegionSelect() {
-  const select = document.getElementById('farm-region-select');
-  if (!select) return;
-
-  const regions = [...new Set(
-    FARMS_GEOJSON.features
-      .map(f => f.properties && f.properties.sgg_nm)
-      .filter(Boolean)
-  )].sort((a, b) => a.localeCompare(b, 'ko'));
-
-  select.innerHTML = [
-    '<option value="ALL">전국 전체</option>',
-    ...regions.map(region => `<option value="${escapeHtml(region)}">${escapeHtml(region)}</option>`)
-  ].join('');
-
-  select.addEventListener('change', updateFarmStats);
-}
-
-function updateFarmStats() {
-  const selectedRegion = document.getElementById('farm-region-select')?.value || 'ALL';
-  const visible = FARMS_GEOJSON.features.filter(f => {
-    const p = f.properties || {};
-    return selectedRegion === 'ALL' || p.sgg_nm === selectedRegion;
-  });
-
-  const counts = { fish:0, shellfish:0, seaweed:0, mixed:0 };
-  let totalArea = 0;
-  visible.forEach(f => {
-    const cat = f.properties.cat || 'mixed';
-    counts[cat] = (counts[cat] || 0) + 1;
-    totalArea += Number(f.properties.area) || 0;
-  });
-
-  const content = document.getElementById('farm-stats-content');
-  if (!content) return;
-
-  content.innerHTML = `
-    <div class="farm-stat-row"><span class="farm-stat-label fish">어류</span><b style="color:#2e86de">${counts.fish.toLocaleString()}</b></div>
-    <div class="farm-stat-row"><span class="farm-stat-label shellfish">패류</span><b style="color:#e67e22">${counts.shellfish.toLocaleString()}</b></div>
-    <div class="farm-stat-row"><span class="farm-stat-label seaweed">해조류</span><b style="color:#27ae60">${counts.seaweed.toLocaleString()}</b></div>
-    <div class="farm-stat-row"><span class="farm-stat-label mixed">복합/기타</span><b style="color:#8e44ad">${counts.mixed.toLocaleString()}</b></div>
-    <div class="farm-stat-row" style="border-top:1px solid #1e3a5f;margin-top:3px;padding-top:5px;">
-      <span>전체 필지</span><b>${visible.length.toLocaleString()}</b>
-    </div>
-    <div class="farm-stat-row"><span>총 면적</span><b>${totalArea.toLocaleString(undefined,{maximumFractionDigits:0})} ha</b></div>
-  `;
-}
-
-// ── 내 위치(GPS) 실시간 추적 컨트롤 ──
-const LOCATE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.5"></circle><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line></svg>`;
-
-let gpsWatchId = null;
-let gpsFirstFix = true;
-let gpsState = null; // { marker, circle }
-
-
-
-function ensureGpsPane(map) {
-  const pane = map.getPane('gps-pane') || map.createPane('gps-pane');
-  pane.style.zIndex = '625';
-  pane.style.pointerEvents = 'none';
-  return pane;
-}
-
-function addLocateControl(map) {
-  const LocateControl = L.Control.extend({
-    options: { position: 'topleft' },
-    onAdd: function () {
-      const container = L.DomUtil.create('div', 'locate-control-wrap leaflet-control');
-      const btn = L.DomUtil.create('a', 'locate-btn', container);
-      btn.href = '#';
-      btn.title = '내 위치 실시간 추적';
-      btn.innerHTML = LOCATE_ICON;
-      L.DomEvent.on(btn, 'click', L.DomEvent.stop);
-      L.DomEvent.on(btn, 'click', () => toggleGpsTracking(map, btn));
-      return container;
-    }
-  });
-  map.addControl(new LocateControl());
-}
-
-function toggleGpsTracking(map, btnEl) {
-  if (gpsWatchId !== null) {
-    navigator.geolocation.clearWatch(gpsWatchId);
-    gpsWatchId = null;
-    if (btnEl) btnEl.classList.remove('active');
-    return;
-  }
-  if (!navigator.geolocation) {
-    alert('이 브라우저에서는 위치 정보 기능을 지원하지 않습니다.');
-    return;
-  }
-  if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
-    alert('위치 정보는 보안 연결(https)에서만 사용할 수 있습니다.');
-    return;
-  }
-
-  gpsFirstFix = true;
-  if (btnEl) btnEl.classList.add('active');
-  startGpsWatch(map, btnEl, true);
-}
-
-function startGpsWatch(map, btnEl, highAccuracy) {
-  gpsWatchId = navigator.geolocation.watchPosition(
-    pos => {
-      const { latitude, longitude, accuracy } = pos.coords;
-      if (!gpsState) {
-        ensureGpsPane(map);
-        const marker = L.circleMarker([latitude, longitude], {
-          radius: 8, weight: 3, color: '#fff', fillColor: '#4a9fd8', fillOpacity: 1,
-          className: 'user-loc-pulse', pane: 'gps-pane', interactive: false, keyboard: false
-        }).addTo(map);
-        const circle = L.circle([latitude, longitude], {
-          radius: accuracy, color: '#4a9fd8', weight: 1, fillColor: '#4a9fd8', fillOpacity: 0.12,
-          pane: 'gps-pane', interactive: false, keyboard: false
-        }).addTo(map);
-        gpsState = { marker, circle };
-      } else {
-        gpsState.marker.setLatLng([latitude, longitude]);
-        gpsState.circle.setLatLng([latitude, longitude]).setRadius(accuracy);
-      }
-      if (gpsFirstFix) {
-        map.setView([latitude, longitude], 15);
-        gpsFirstFix = false;
-      }
-    },
-    err => {
-      // 고정밀(GPS) 모드가 실패하면 네트워크 기반(Wi-Fi/기지국) 위치로 한 번 더 시도
-      if (highAccuracy && (err.code === 2 || err.code === 3)) {
-        navigator.geolocation.clearWatch(gpsWatchId);
-        startGpsWatch(map, btnEl, false);
-        return;
-      }
-      let msg = '현재 위치를 가져올 수 없습니다.';
-      if (err.code === 1) {
-        msg = '위치 정보 접근 권한이 거부되었습니다.\n브라우저/기기 설정에서 이 사이트의 위치 접근을 허용해주세요.';
-      } else if (err.code === 2) {
-        msg = 'GPS 신호를 사용할 수 없습니다.\n\n확인해주세요:\n· 기기의 위치 서비스(설정 > 개인정보 보호 > 위치 서비스)가 켜져 있는지\n· 이 브라우저 앱에 위치 접근 권한이 허용되어 있는지\n· 실내/지하 등 신호가 약한 곳이라면 창가나 실외에서 다시 시도';
-      } else if (err.code === 3) {
-        msg = '위치 확인 시간이 초과되었습니다. 다시 시도해주세요.';
-      }
-      alert(msg);
-      if (gpsWatchId !== null) { navigator.geolocation.clearWatch(gpsWatchId); gpsWatchId = null; }
-      if (btnEl) btnEl.classList.remove('active');
-    },
-    highAccuracy
-      ? { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 }
-      : { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }
-  );
-}
-
-// ── 배경지도(흑색/백색) 전환 ──
-const VWORLD_KEY_JW = '157B3208-B2B2-3F62-91D0-A3C82B0ACF1F';
-let baseLayers1 = null;
-let basemapMode1 = 'dark';
-
-function buildBaseLayers1() {
-  const dark = L.tileLayer(
-    'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
-    { attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ | 양식장: 해양수산부 국립해양조사원', maxZoom: 16 }
-  );
-  const white = L.tileLayer(
-    `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY_JW}/white/{z}/{y}/{x}.png`,
-    { attribution: '&copy; VWorld (국토교통부 국토정보플랫폼) | 양식장: 해양수산부 국립해양조사원', maxZoom: 19, minZoom: 6 }
-  );
-  const satellite = L.tileLayer(
-    `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY_JW}/Satellite/{z}/{y}/{x}.jpeg`,
-    { attribution: '&copy; VWorld (국토교통부 국토정보플랫폼) 위성영상 | 양식장: 해양수산부 국립해양조사원', maxZoom: 19, minZoom: 6 }
-  );
-  return { dark, white, satellite };
-}
-
-function setBasemap1(mode) {
-  if (!map1 || !baseLayers1) return;
-  if (basemapMode1 === mode) return;
-  // 현재 레이어 제거
-  Object.values(baseLayers1).forEach(layer => {
-    if (map1.hasLayer(layer)) map1.removeLayer(layer);
-  });
-  // 선택 레이어 추가
-  baseLayers1[mode].addTo(map1);
-  basemapMode1 = mode;
-  // 버튼 활성화 상태 갱신
-  document.querySelectorAll('#basemap-btn-group-1 .basemap-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.mode === mode);
-  });
-}
-
-// 하위호환 (혹시 외부에서 호출되는 경우 대비)
-function toggleBasemap1() { setBasemap1(basemapMode1 === 'dark' ? 'white' : 'dark'); }
-
-function initMap1() {
-  map1 = L.map('map1', { preferCanvas: true, center: [35.9, 127.7], zoom: 7, zoomControl: false });
-  baseLayers1 = buildBaseLayers1();
-  baseLayers1.dark.addTo(map1);
-  ensureGpsPane(map1);
-  addLocateControl(map1);
-  const searchInput = document.getElementById('farm-search-input');
-  const searchButton = document.getElementById('farm-search-btn');
-  searchButton.addEventListener('click', searchFarms);
-  searchInput.addEventListener('keydown', e => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      searchFarms();
-    }
-  });
-
-  initFarmRegionSelect();
-  document.getElementById('farm-loading').style.display = 'none';
-  rebuildFarmLayer();
-
-  // 오염원 영향반경 렌더링
-  renderPollutionLayers(map1);
-}
-// ══════════════════════════════════════════════
-//  오염원 레이어 온오프 토글 함수 추가
-// ══════════════════════════════════════════════
-function togglePollutionLayer() {
-    // 맵이나 오염원 그룹이 초기화되지 않았다면 무시
-    if (!map1 || !pollutionLayerGroup) return;
-    
-    const btn = document.getElementById('pollution-toggle-btn');
-    
-    // 현재 지도에 오염원 레이어가 켜져 있는 경우 -> 끄기
-    if (map1.hasLayer(pollutionLayerGroup)) {
-        map1.removeLayer(pollutionLayerGroup);
-        btn.classList.remove('active');
-        btn.style.background = 'transparent';
-        btn.style.color = '#e74c3c';
-        btn.innerHTML = '<i class="fa-solid fa-droplet-slash"></i> 오염원 표시 OFF';
-    } 
-    // 현재 지도에 오염원 레이어가 꺼져 있는 경우 -> 켜기
-    else {
-        map1.addLayer(pollutionLayerGroup);
-        btn.classList.add('active');
-        btn.style.background = '#e74c3c';
-        btn.style.color = '#fff';
-        btn.innerHTML = '<i class="fa-solid fa-droplet"></i> 오염원 표시 ON';
-    }
-}
-
-// ══════════════════════════════════════════════
-//  오염원 영향반경 (해상 클리핑)
-// ══════════════════════════════════════════════
-//
-// pollution_sources.js 에서 window.POLLUTION_SOURCES 배열을 주입합니다.
-// Turf.js의 circle + difference 를 이용해 육상 부분을 잘라냅니다.
-// 한국 해안선은 간략화된 GeoJSON을 내장합니다(별도 파일 불필요).
-//
-// ── 한국 육상 경계 (간략화 MultiPolygon) ──────────────────
-// Natural Earth 10m 기반으로 한반도+제주 주요 도서를 포함합니다.
-// 세부 해안선은 클리핑 정밀도와 용량의 균형을 맞춰 단순화했습니다.
-const KOREA_LAND_GEOJSON = {"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"한반도"},"geometry":{"type":"MultiPolygon","coordinates":[[[[124.61,37.94],[124.72,37.63],[125.02,37.67],[125.37,37.84],[125.68,37.93],[126.00,37.62],[126.12,37.22],[126.37,36.93],[126.54,36.70],[126.63,36.47],[126.52,36.26],[126.35,36.12],[126.65,36.05],[126.85,35.66],[126.79,35.42],[126.90,35.24],[127.01,34.94],[127.27,34.64],[127.57,34.60],[127.86,34.76],[128.05,35.03],[128.46,35.05],[128.77,35.09],[128.98,35.31],[129.21,35.48],[129.35,35.64],[129.38,35.85],[129.45,36.05],[129.48,36.28],[129.42,36.58],[129.38,36.82],[129.42,37.06],[129.36,37.30],[129.20,37.60],[129.13,37.80],[128.96,38.07],[128.63,38.34],[128.37,38.49],[128.08,38.61],[127.77,38.62],[127.47,38.72],[127.14,38.61],[126.89,38.36],[126.58,38.20],[126.30,38.05],[125.98,37.98],[125.60,38.06],[125.30,38.03],[124.96,38.11],[124.78,38.03],[124.61,37.94]]]]}},{"type":"Feature","properties":{"name":"제주도"},"geometry":{"type":"Polygon","coordinates":[[[126.15,33.19],[126.55,33.10],[126.97,33.12],[127.24,33.30],[127.27,33.50],[126.97,33.63],[126.57,33.65],[126.19,33.53],[125.98,33.38],[126.15,33.19]]]}},{"type":"Feature","properties":{"name":"진도"},"geometry":{"type":"Polygon","coordinates":[[[126.12,34.38],[126.31,34.28],[126.41,34.40],[126.32,34.53],[126.14,34.53],[126.12,34.38]]]}},{"type":"Feature","properties":{"name":"거제도"},"geometry":{"type":"Polygon","coordinates":[[[128.52,34.78],[128.72,34.71],[128.88,34.80],[128.91,34.95],[128.76,35.06],[128.57,35.05],[128.46,34.93],[128.52,34.78]]]}},{"type":"Feature","properties":{"name":"남해도"},"geometry":{"type":"Polygon","coordinates":[[[127.65,34.69],[127.91,34.63],[128.07,34.73],[128.07,34.87],[127.87,34.93],[127.64,34.85],[127.65,34.69]]]}},{"type":"Feature","properties":{"name":"강화도"},"geometry":{"type":"Polygon","coordinates":[[[126.32,37.62],[126.54,37.56],[126.65,37.66],[126.57,37.78],[126.38,37.78],[126.30,37.70],[126.32,37.62]]]}}]};
-
-let pollutionLayerGroup = null;
-
-function renderPollutionLayers(map) {
-  const sources = window.POLLUTION_SOURCES;
-  if (!sources || !sources.length) return;
-  if (typeof turf === 'undefined') {
-    console.warn('[오염원] Turf.js 미로드 — 영향반경을 표시할 수 없습니다.');
-    return;
-  }
-
-  // 기존 레이어 제거
-  if (pollutionLayerGroup) {
-    map.removeLayer(pollutionLayerGroup);
-  }
-  pollutionLayerGroup = L.layerGroup().addTo(map);
-
-  let landUnion = null;
-  try {
-    KOREA_LAND_GEOJSON.features.forEach(f => {
-      landUnion = landUnion ? turf.union(landUnion, f) : f;
-    });
-  } catch(e) {}
-
-  sources.forEach(src => {
-    const { name, lat, lng, radius_km, color, opacity } = src;
-    const center = [lng, lat];
-    const fillColor  = color || '#e74c3c';
-    const fillOpacity = opacity != null ? opacity : 0.35;
-
-    const popupHtml = `
-      <div style="min-width:140px;font-size:12px;line-height:1.7;">
-        <div style="font-weight:700;font-size:13px;margin-bottom:4px;">${name}</div>
-        <div style="color:#64748b;">영향반경: <b style="color:#e74c3c;">${radius_km} km</b></div>
-        <div style="color:#64748b;">위치: ${lat.toFixed(4)}, ${lng.toFixed(4)}</div>
-      </div>`;
-
-    // 1. 반경이 0보다 클 때만 폴리곤 생성 (오류 방지)
-    if (radius_km > 0) {
-      let circleFeature = turf.circle(center, radius_km, { steps: 64, units: 'kilometers' });
-      let seaPolygon = circleFeature;
-      if (landUnion) {
-        try {
-          const diff = turf.difference(circleFeature, landUnion);
-          if (diff) seaPolygon = diff;
-        } catch(e) {}
-      }
-
-      const geoLayer = L.geoJSON(seaPolygon, {
-        style: {
-          color: fillColor,
-          weight: 1.5,
-          opacity: 0.7,
-          fillColor: fillColor,
-          fillOpacity: fillOpacity
-        },
-        // 반경 영역이 클릭을 가로채지 않도록 설정 (양식장 클릭 가능해짐)
-        interactive: false
-      });
-      pollutionLayerGroup.addLayer(geoLayer);
-    }
-
-    // 2. 오염원 중심 마커는 반경과 무관하게 항상 생성 (테두리 제거됨)
-    const markerIcon = L.divIcon({
-      className: '',
-      html: `<div style="
-        width:10px;height:10px;
-        border-radius:50%;
-        background:${fillColor};
-        border:none;
-        box-shadow:0 1px 4px rgba(0,0,0,.6);
-      "></div>`,
-      iconSize: [10, 10],
-      iconAnchor: [5, 5],
-      popupAnchor: [0, -8]
-    });
-    
-    const marker = L.marker([lat, lng], { icon: markerIcon, zIndexOffset: 500 });
-    marker.bindPopup(popupHtml, { maxWidth: 220 });
-
-    pollutionLayerGroup.addLayer(marker);
-  });
-}
-
-  // 기존 레이어 제거 (재호출 대비)
-  if (pollutionLayerGroup) {
-    map.removeLayer(pollutionLayerGroup);
-  }
-  pollutionLayerGroup = L.layerGroup().addTo(map);
-
-  // 육상 union geometry (클리핑용)
-  let landUnion = null;
-  try {
-    KOREA_LAND_GEOJSON.features.forEach(f => {
-      landUnion = landUnion ? turf.union(landUnion, f) : f;
-    });
-  } catch(e) {
-    console.warn('[오염원] 육상 경계 union 실패:', e);
-  }
-
-  sources.forEach(src => {
-    const { name, lat, lng, radius_km, color, opacity } = src;
-    const center = [lng, lat]; // turf는 [lng, lat]
-    const fillColor  = color   || '#e74c3c';
-    const fillOpacity = opacity != null ? opacity : 0.35;
-
-    // turf로 반경 원 생성 (64각형 근사)
-    let circleFeature = turf.circle(center, radius_km, { steps: 64, units: 'kilometers' });
-
-    // 육상 부분 제거: difference(원, 육상)
-    let seaPolygon = circleFeature;
-    if (landUnion) {
-      try {
-        const diff = turf.difference(circleFeature, landUnion);
-        if (diff) seaPolygon = diff;
-      } catch(e) {
-        // difference 실패 시 원본 원 사용 (육상 클리핑 생략)
-        console.warn(`[오염원] ${name} 클리핑 실패, 원본 사용:`, e);
-      }
-    }
-
-    // Leaflet GeoJSON으로 렌더
-    const geoLayer = L.geoJSON(seaPolygon, {
-      style: {
-        color: fillColor,
-        weight: 1.5,
-        opacity: 0.7,
-        fillColor: fillColor,
-        fillOpacity: fillOpacity
-      },
-      interactive: true
-    });
-
-    // 오염원 마커 (중심점)
-const markerIcon = L.divIcon({
-  className: '',
-  html: `<div style="
-    width:10px;height:10px;
-    border-radius:50%;
-    background:${fillColor};
-    border:none;
-    box-shadow:0 1px 4px rgba(0,0,0,.6);
-  "></div>`,
-  iconSize: [10, 10],
-  iconAnchor: [5, 5],
-  popupAnchor: [0, -8]
-});
-    const marker = L.marker([lat, lng], { icon: markerIcon, zIndexOffset: 500 });
-
-    // 팝업 (클릭 시)
-    const popupHtml = `
-      <div style="min-width:140px;font-size:12px;line-height:1.7;">
-        <div style="font-weight:700;font-size:13px;margin-bottom:4px;">${name}</div>
-        <div style="color:#64748b;">영향반경: <b style="color:#e74c3c;">${radius_km} km</b></div>
-        <div style="color:#64748b;">위치: ${lat.toFixed(4)}, ${lng.toFixed(4)}</div>
-      </div>`;
-    geoLayer.bindPopup(popupHtml, { maxWidth: 220 });
-    marker.bindPopup(popupHtml, { maxWidth: 220 });
-
-    pollutionLayerGroup.addLayer(geoLayer);
-    pollutionLayerGroup.addLayer(marker);
-  });
-}
-
-
-// ══════════════════════════════════════════════
-//  탭2: 어업생산량 통계 지도
-// ══════════════════════════════════════════════
-
+        const FARMS_GEOJSON = window.AQUACULTURE_FARMS_GEOJSON;
+
+        const catMeta = {
+          fish:      { label: "어류",    color: "#2e86de" },
+          shellfish: { label: "패류",    color: "#e67e22" },
+          seaweed:   { label: "해조류",  color: "#27ae60" },
+          mixed:     { label: "복합/기타", color: "#8e44ad" },
+        };
+
+        const farmState = { activeCats: new Set(['fish','shellfish','seaweed','mixed']) };
+
+        function farmPopupHtml(p) {
+          const meta = catMeta[p.cat] || catMeta.mixed;
+          function fmtDate(ymd) {
+            if (!ymd || ymd.length !== 8) return ymd || '-';
+            return `${ymd.slice(0,4)}.${ymd.slice(4,6)}.${ymd.slice(6,8)}`;
+          }
+          return `
+            <div class="popup-farm">
+              <div class="popup-tag" style="background:${meta.color}">${meta.label}</div>
+              <div class="popup-title">${p.lcns_no || '(면허번호 미상)'}</div>
+              <div class="popup-row"><b>양식물</b><span>${p.farm_knd}</span></div>
+              <div class="popup-row"><b>어업종류</b><span>${p.fids_knd}${p.fids_mthd ? ' / ' + p.fids_mthd : ''}</span></div>
+              <div class="popup-row"><b>면적</b><span>${p.area} ha</span></div>
+              <div class="popup-row"><b>주소</b><span>${p.addr || '-'} (${p.sgg_nm || '-'})</span></div>
+              <div class="popup-row"><b>면허기간</b><span>${fmtDate(p.lcns_bgng)} ~ ${fmtDate(p.lcns_end)}</span></div>
+            </div>
+          `;
+        }
+
+        function rebuildFarmLayer() {
+          if (geoLayer) { map1.removeLayer(geoLayer); }
+          const canvasR = L.canvas({ padding: 0.3 });
+          geoLayer = L.geoJSON(FARMS_GEOJSON, {
+            filter: f => farmState.activeCats.has(f.properties.cat),
+            coordsToLatLng: c => L.latLng(c[1] + FARM_OFFSET.lat, c[0] + FARM_OFFSET.lng),
+            style: f => {
+              const meta = catMeta[f.properties.cat] || catMeta.mixed;
+              return { color: meta.color, weight: 1.2, fillColor: meta.color, fillOpacity: 0.4, renderer: canvasR };
+            },
+            renderer: canvasR,
+            onEachFeature: (feature, layer) => {
+              layer.bindPopup(farmPopupHtml(feature.properties));
+              layer.on('mouseover', () => layer.setStyle({ weight: 3, fillOpacity: 0.7 }));
+              layer.on('mouseout', () => geoLayer.resetStyle(layer));
+            }
+          }).addTo(map1);
+          updateFarmStats();
+        }
+
+        // 원본 좌표와 실제 위치 간 오차 보정값
+        const FARM_OFFSET = { lat: -0.0023963963963963965, lng: 0.002600511929058334 };
+
+        function normalizeFarmNo(value) {
+          return String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+        }
+
+        function escapeHtml(value) {
+          return String(value ?? '').replace(/[&<>"']/g, ch => ({
+            '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+          }[ch]));
+        }
+
+        function searchFarms() {
+          const input = document.getElementById('farm-search-input');
+          const resultsBox = document.getElementById('farm-search-results');
+          const query = normalizeFarmNo(input.value);
+
+          resultsBox.innerHTML = '';
+          resultsBox.classList.remove('show');
+
+          if (!query) return;
+
+          const exact = FARMS_GEOJSON.features.filter(f =>
+            normalizeFarmNo(f.properties.lcns_no) === query
+          );
+          const partial = FARMS_GEOJSON.features.filter(f => {
+            const no = normalizeFarmNo(f.properties.lcns_no);
+            return no.includes(query) && !exact.includes(f);
+          });
+          const matches = exact.concat(partial);
+
+          resultsBox.classList.add('show');
+
+          if (!matches.length) {
+            resultsBox.innerHTML = `
+              <div class="farm-search-count-row">
+                <span class="farm-search-empty" style="padding:0;">해당 양식번호를 찾을 수 없습니다.</span>
+                <button type="button" class="farm-search-close" onclick="closeFarmSearchResults()">✕ 닫기</button>
+              </div>`;
+            return;
+          }
+
+          const countText = exact.length
+            ? `정확히 일치 ${exact.length}건${partial.length ? ` · 추가 검색결과 ${partial.length}건` : ''}`
+            : `검색결과 ${matches.length}건`;
+
+          resultsBox.innerHTML = `
+            <div class="farm-search-count-row">
+              <span class="farm-search-count">${countText}</span>
+              <button type="button" class="farm-search-close" onclick="closeFarmSearchResults()">✕ 닫기</button>
+            </div>
+            ${matches.map((f, i) => {
+              const p = f.properties;
+              return `
+                <button type="button" class="farm-search-item" data-farm-index="${FARMS_GEOJSON.features.indexOf(f)}">
+                  <strong>${escapeHtml(p.lcns_no || '(면허번호 미상)')}</strong>
+                  <span>${escapeHtml(p.farm_knd || '-')} · ${escapeHtml(p.addr || p.sgg_nm || '-')}</span>
+                </button>`;
+            }).join('')}
+          `;
+
+          resultsBox.querySelectorAll('.farm-search-item').forEach(item => {
+            item.addEventListener('click', () => {
+              const feature = FARMS_GEOJSON.features[Number(item.dataset.farmIndex)];
+              selectFarmFeature(feature);
+              closeFarmSearchResults();
+            });
+          });
+        }
+
+        function closeFarmSearchResults() {
+          const resultsBox = document.getElementById('farm-search-results');
+          resultsBox.innerHTML = '';
+          resultsBox.classList.remove('show');
+        }
+
+        function selectFarmFeature(feature) {
+          const p = feature.properties;
+          let targetLayer = null;
+          geoLayer.eachLayer(layer => {
+            if (layer.feature === feature) targetLayer = layer;
+          });
+
+          if (!targetLayer) return;
+
+          const bounds = targetLayer.getBounds();
+          if (bounds.isValid()) {
+            map1.panTo(bounds.getCenter(), { animate: true });
+          }
+
+          setTimeout(() => {
+            targetLayer.openPopup();
+          }, 250);
+        }
+
+        function initFarmRegionSelect() {
+          const select = document.getElementById('farm-region-select');
+          if (!select) return;
+
+          const regions = [...new Set(
+            FARMS_GEOJSON.features
+              .map(f => f.properties && f.properties.sgg_nm)
+              .filter(Boolean)
+          )].sort((a, b) => a.localeCompare(b, 'ko'));
+
+          select.innerHTML = [
+            '<option value="ALL">전국 전체</option>',
+            ...regions.map(region => `<option value="${escapeHtml(region)}">${escapeHtml(region)}</option>`)
+          ].join('');
+
+          select.addEventListener('change', updateFarmStats);
+        }
+
+        function updateFarmStats() {
+          const selectedRegion = document.getElementById('farm-region-select')?.value || 'ALL';
+          const visible = FARMS_GEOJSON.features.filter(f => {
+            const p = f.properties || {};
+            return selectedRegion === 'ALL' || p.sgg_nm === selectedRegion;
+          });
+
+          const counts = { fish:0, shellfish:0, seaweed:0, mixed:0 };
+          let totalArea = 0;
+          visible.forEach(f => {
+            const cat = f.properties.cat || 'mixed';
+            counts[cat] = (counts[cat] || 0) + 1;
+            totalArea += Number(f.properties.area) || 0;
+          });
+
+          const content = document.getElementById('farm-stats-content');
+          if (!content) return;
+
+          content.innerHTML = `
+            <div class="farm-stat-row"><span class="farm-stat-label fish">어류</span><b style="color:#2e86de">${counts.fish.toLocaleString()}</b></div>
+            <div class="farm-stat-row"><span class="farm-stat-label shellfish">패류</span><b style="color:#e67e22">${counts.shellfish.toLocaleString()}</b></div>
+            <div class="farm-stat-row"><span class="farm-stat-label seaweed">해조류</span><b style="color:#27ae60">${counts.seaweed.toLocaleString()}</b></div>
+            <div class="farm-stat-row"><span class="farm-stat-label mixed">복합/기타</span><b style="color:#8e44ad">${counts.mixed.toLocaleString()}</b></div>
+            <div class="farm-stat-row" style="border-top:1px solid #1e3a5f;margin-top:3px;padding-top:5px;">
+              <span>전체 필지</span><b>${visible.length.toLocaleString()}</b>
+            </div>
+            <div class="farm-stat-row"><span>총 면적</span><b>${totalArea.toLocaleString(undefined,{maximumFractionDigits:0})} ha</b></div>
+          `;
+        }
+
+        // ── 내 위치(GPS) 실시간 추적 컨트롤 ──
+        const LOCATE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.5"></circle><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line></svg>`;
+
+        let gpsWatchId = null;
+        let gpsFirstFix = true;
+        let gpsState = null; 
+
+        function ensureGpsPane(map) {
+          const pane = map.getPane('gps-pane') || map.createPane('gps-pane');
+          pane.style.zIndex = '625';
+          pane.style.pointerEvents = 'none';
+          return pane;
+        }
+
+        function addLocateControl(map) {
+          const LocateControl = L.Control.extend({
+            options: { position: 'topleft' },
+            onAdd: function () {
+              const container = L.DomUtil.create('div', 'locate-control-wrap leaflet-control');
+              const btn = L.DomUtil.create('a', 'locate-btn', container);
+              btn.href = '#';
+              btn.title = '내 위치 실시간 추적';
+              btn.innerHTML = LOCATE_ICON;
+              L.DomEvent.on(btn, 'click', L.DomEvent.stop);
+              L.DomEvent.on(btn, 'click', () => toggleGpsTracking(map, btn));
+              return container;
+            }
+          });
+          map.addControl(new LocateControl());
+        }
+
+        function toggleGpsTracking(map, btnEl) {
+          if (gpsWatchId !== null) {
+            navigator.geolocation.clearWatch(gpsWatchId);
+            gpsWatchId = null;
+            if (btnEl) btnEl.classList.remove('active');
+            return;
+          }
+          if (!navigator.geolocation) {
+            alert('이 브라우저에서는 위치 정보 기능을 지원하지 않습니다.');
+            return;
+          }
+          if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+            alert('위치 정보는 보안 연결(https)에서만 사용할 수 있습니다.');
+            return;
+          }
+
+          gpsFirstFix = true;
+          if (btnEl) btnEl.classList.add('active');
+          startGpsWatch(map, btnEl, true);
+        }
+
+        function startGpsWatch(map, btnEl, highAccuracy) {
+          gpsWatchId = navigator.geolocation.watchPosition(
+            pos => {
+              const { latitude, longitude, accuracy } = pos.coords;
+              if (!gpsState) {
+                ensureGpsPane(map);
+                const marker = L.circleMarker([latitude, longitude], {
+                  radius: 8, weight: 3, color: '#fff', fillColor: '#4a9fd8', fillOpacity: 1,
+                  className: 'user-loc-pulse', pane: 'gps-pane', interactive: false, keyboard: false
+                }).addTo(map);
+                const circle = L.circle([latitude, longitude], {
+                  radius: accuracy, color: '#4a9fd8', weight: 1, fillColor: '#4a9fd8', fillOpacity: 0.12,
+                  pane: 'gps-pane', interactive: false, keyboard: false
+                }).addTo(map);
+                gpsState = { marker, circle };
+              } else {
+                gpsState.marker.setLatLng([latitude, longitude]);
+                gpsState.circle.setLatLng([latitude, longitude]).setRadius(accuracy);
+              }
+              if (gpsFirstFix) {
+                map.setView([latitude, longitude], 15);
+                gpsFirstFix = false;
+              }
+            },
+            err => {
+              if (highAccuracy && (err.code === 2 || err.code === 3)) {
+                navigator.geolocation.clearWatch(gpsWatchId);
+                startGpsWatch(map, btnEl, false);
+                return;
+              }
+              let msg = '현재 위치를 가져올 수 없습니다.';
+              if (err.code === 1) {
+                msg = '위치 정보 접근 권한이 거부되었습니다.\n브라우저/기기 설정에서 이 사이트의 위치 접근을 허용해주세요.';
+              } else if (err.code === 2) {
+                msg = 'GPS 신호를 사용할 수 없습니다.\n\n확인해주세요:\n· 기기의 위치 서비스(설정 > 개인정보 보호 > 위치 서비스)가 켜져 있는지\n· 이 브라우저 앱에 위치 접근 권한이 허용되어 있는지\n· 실내/지하 등 신호가 약한 곳이라면 창가나 실외에서 다시 시도';
+              } else if (err.code === 3) {
+                msg = '위치 확인 시간이 초과되었습니다. 다시 시도해주세요.';
+              }
+              alert(msg);
+              if (gpsWatchId !== null) { navigator.geolocation.clearWatch(gpsWatchId); gpsWatchId = null; }
+              if (btnEl) btnEl.classList.remove('active');
+            },
+            highAccuracy
+              ? { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 }
+              : { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }
+          );
+        }
+
+        // ── 배경지도(흑색/백색) 전환 ──
+        const VWORLD_KEY_JW = '157B3208-B2B2-3F62-91D0-A3C82B0ACF1F';
+        let baseLayers1 = null;
+        let basemapMode1 = 'dark';
+
+        function buildBaseLayers1() {
+          const dark = L.tileLayer(
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+            { attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ | 양식장: 해양수산부 국립해양조사원', maxZoom: 16 }
+          );
+          const white = L.tileLayer(
+            `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY_JW}/white/{z}/{y}/{x}.png`,
+            { attribution: '&copy; VWorld (국토교통부 국토정보플랫폼) | 양식장: 해양수산부 국립해양조사원', maxZoom: 19, minZoom: 6 }
+          );
+          const satellite = L.tileLayer(
+            `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY_JW}/Satellite/{z}/{y}/{x}.jpeg`,
+            { attribution: '&copy; VWorld (국토교통부 국토정보플랫폼) 위성영상 | 양식장: 해양수산부 국립해양조사원', maxZoom: 19, minZoom: 6 }
+          );
+          return { dark, white, satellite };
+        }
+
+        function setBasemap1(mode) {
+          if (!map1 || !baseLayers1) return;
+          if (basemapMode1 === mode) return;
+          Object.values(baseLayers1).forEach(layer => {
+            if (map1.hasLayer(layer)) map1.removeLayer(layer);
+          });
+          baseLayers1[mode].addTo(map1);
+          basemapMode1 = mode;
+          document.querySelectorAll('#basemap-btn-group-1 .basemap-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.mode === mode);
+          });
+        }
+
+        function initMap1() {
+          map1 = L.map('map1', { preferCanvas: true, center: [35.9, 127.7], zoom: 7, zoomControl: false });
+          baseLayers1 = buildBaseLayers1();
+          baseLayers1.dark.addTo(map1);
+          ensureGpsPane(map1);
+          addLocateControl(map1);
+          const searchInput = document.getElementById('farm-search-input');
+          const searchButton = document.getElementById('farm-search-btn');
+          searchButton.addEventListener('click', searchFarms);
+          searchInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              searchFarms();
+            }
+          });
+
+          initFarmRegionSelect();
+          document.getElementById('farm-loading').style.display = 'none';
+          rebuildFarmLayer();
+
+          // 오염원 영향반경 렌더링
+          renderPollutionLayers(map1);
+        }
+
+        // ══════════════════════════════════════════════
+        //  오염원 레이어 온오프 토글 함수
+        // ══════════════════════════════════════════════
+        function togglePollutionLayer() {
+            if (!map1 || !pollutionLayerGroup) return;
+            const btn = document.getElementById('pollution-toggle-btn');
+            
+            if (map1.hasLayer(pollutionLayerGroup)) {
+                map1.removeLayer(pollutionLayerGroup);
+                btn.classList.remove('active');
+                btn.style.background = 'transparent';
+                btn.style.color = '#e74c3c';
+                btn.innerHTML = '<i class="fa-solid fa-droplet-slash"></i> 오염원 표시 OFF';
+            } else {
+                map1.addLayer(pollutionLayerGroup);
+                btn.classList.add('active');
+                btn.style.background = '#e74c3c';
+                btn.style.color = '#fff';
+                btn.innerHTML = '<i class="fa-solid fa-droplet"></i> 오염원 표시 ON';
+            }
+        }
+
+        // ══════════════════════════════════════════════
+        //  오염원 영향반경 렌더링 함수
+        // ══════════════════════════════════════════════
+        const KOREA_LAND_GEOJSON = {"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"한반도"},"geometry":{"type":"MultiPolygon","coordinates":[[[[124.61,37.94],[124.72,37.63],[125.02,37.67],[125.37,37.84],[125.68,37.93],[126.00,37.62],[126.12,37.22],[126.37,36.93],[126.54,36.70],[126.63,36.47],[126.52,36.26],[126.35,36.12],[126.65,36.05],[126.85,35.66],[126.79,35.42],[126.90,35.24],[127.01,34.94],[127.27,34.64],[127.57,34.60],[127.86,34.76],[128.05,35.03],[128.46,35.05],[128.77,35.09],[128.98,35.31],[129.21,35.48],[129.35,35.64],[129.38,35.85],[129.45,36.05],[129.48,36.28],[129.42,36.58],[129.38,36.82],[129.42,37.06],[129.36,37.30],[129.20,37.60],[129.13,37.80],[128.96,38.07],[128.63,38.34],[128.37,38.49],[128.08,38.61],[127.77,38.62],[127.47,38.72],[127.14,38.61],[126.89,38.36],[126.58,38.20],[126.30,38.05],[125.98,37.98],[125.60,38.06],[125.30,38.03],[124.96,38.11],[124.78,38.03],[124.61,37.94]]]]}},{"type":"Feature","properties":{"name":"제주도"},"geometry":{"type":"Polygon","coordinates":[[[126.15,33.19],[126.55,33.10],[126.97,33.12],[127.24,33.30],[127.27,33.50],[126.97,33.63],[126.57,33.65],[126.19,33.53],[125.98,33.38],[126.15,33.19]]]}},{"type":"Feature","properties":{"name":"진도"},"geometry":{"type":"Polygon","coordinates":[[[126.12,34.38],[126.31,34.28],[126.41,34.40],[126.32,34.53],[126.14,34.53],[126.12,34.38]]]}},{"type":"Feature","properties":{"name":"거제도"},"geometry":{"type":"Polygon","coordinates":[[[128.52,34.78],[128.72,34.71],[128.88,34.80],[128.91,34.95],[128.76,35.06],[128.57,35.05],[128.46,34.93],[128.52,34.78]]]}},{"type":"Feature","properties":{"name":"남해도"},"geometry":{"type":"Polygon","coordinates":[[[127.65,34.69],[127.91,34.63],[128.07,34.73],[128.07,34.87],[127.87,34.93],[127.64,34.85],[127.65,34.69]]]}},{"type":"Feature","properties":{"name":"강화도"},"geometry":{"type":"Polygon","coordinates":[[[126.32,37.62],[126.54,37.56],[126.65,37.66],[126.57,37.78],[126.38,37.78],[126.30,37.70],[126.32,37.62]]]}}]};
+
+        let pollutionLayerGroup = null;
+
+        function renderPollutionLayers(map) {
+          const sources = window.POLLUTION_SOURCES;
+          if (!sources || !sources.length) return;
+          if (typeof turf === 'undefined') {
+            console.warn('[오염원] Turf.js 미로드 — 영향반경을 표시할 수 없습니다.');
+            return;
+          }
+
+          if (pollutionLayerGroup) {
+            map.removeLayer(pollutionLayerGroup);
+          }
+          pollutionLayerGroup = L.layerGroup().addTo(map);
+
+          let landUnion = null;
+          try {
+            KOREA_LAND_GEOJSON.features.forEach(f => {
+              landUnion = landUnion ? turf.union(landUnion, f) : f;
+            });
+          } catch(e) {}
+
+          sources.forEach(src => {
+            const { name, lat, lng, radius_km, color, opacity } = src;
+            const center = [lng, lat];
+            const fillColor  = color || '#e74c3c';
+            const fillOpacity = opacity != null ? opacity : 0.35;
+
+            const popupHtml = `
+              <div style="min-width:140px;font-size:12px;line-height:1.7;">
+                <div style="font-weight:700;font-size:13px;margin-bottom:4px;">${name}</div>
+                <div style="color:#64748b;">영향반경: <b style="color:#e74c3c;">${radius_km} km</b></div>
+                <div style="color:#64748b;">위치: ${lat.toFixed(4)}, ${lng.toFixed(4)}</div>
+              </div>`;
+
+            if (radius_km > 0) {
+              let circleFeature = turf.circle(center, radius_km, { steps: 64, units: 'kilometers' });
+              let seaPolygon = circleFeature;
+              if (landUnion) {
+                try {
+                  const diff = turf.difference(circleFeature, landUnion);
+                  if (diff) seaPolygon = diff;
+                } catch(e) {}
+              }
+
+              const geoLayer = L.geoJSON(seaPolygon, {
+                style: { color: fillColor, weight: 1.5, opacity: 0.7, fillColor: fillColor, fillOpacity: fillOpacity },
+                interactive: false
+              });
+              pollutionLayerGroup.addLayer(geoLayer);
+            }
+
+            const markerIcon = L.divIcon({
+              className: '',
+              html: `<div style="width:10px;height:10px;border-radius:50%;background:${fillColor};border:none;box-shadow:0 1px 4px rgba(0,0,0,.6);"></div>`,
+              iconSize: [10, 10],
+              iconAnchor: [5, 5],
+              popupAnchor: [0, -8]
+            });
+            
+            const marker = L.marker([lat, lng], { icon: markerIcon, zIndexOffset: 500 });
+            marker.bindPopup(popupHtml, { maxWidth: 220 });
+            pollutionLayerGroup.addLayer(marker);
+          });
+        }
 
         function initFarmTabMap() {
             if (!map1inited) {
@@ -1887,7 +1761,6 @@ const markerIcon = L.divIcon({
                 if (map1) map1.invalidateSize();
             }, 100);
         }
-
     </script>
 </body>
 </html>
