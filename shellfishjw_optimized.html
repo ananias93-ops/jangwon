@@ -1712,13 +1712,85 @@ const KOREA_LAND_GEOJSON = {"type":"FeatureCollection","features":[{"type":"Feat
 let pollutionLayerGroup = null;
 
 function renderPollutionLayers(map) {
-  // pollution_sources.js 가 로드되지 않았거나 데이터가 없으면 조용히 종료
   const sources = window.POLLUTION_SOURCES;
   if (!sources || !sources.length) return;
   if (typeof turf === 'undefined') {
     console.warn('[오염원] Turf.js 미로드 — 영향반경을 표시할 수 없습니다.');
     return;
   }
+
+  // 기존 레이어 제거
+  if (pollutionLayerGroup) {
+    map.removeLayer(pollutionLayerGroup);
+  }
+  pollutionLayerGroup = L.layerGroup().addTo(map);
+
+  let landUnion = null;
+  try {
+    KOREA_LAND_GEOJSON.features.forEach(f => {
+      landUnion = landUnion ? turf.union(landUnion, f) : f;
+    });
+  } catch(e) {}
+
+  sources.forEach(src => {
+    const { name, lat, lng, radius_km, color, opacity } = src;
+    const center = [lng, lat];
+    const fillColor  = color || '#e74c3c';
+    const fillOpacity = opacity != null ? opacity : 0.35;
+
+    const popupHtml = `
+      <div style="min-width:140px;font-size:12px;line-height:1.7;">
+        <div style="font-weight:700;font-size:13px;margin-bottom:4px;">${name}</div>
+        <div style="color:#64748b;">영향반경: <b style="color:#e74c3c;">${radius_km} km</b></div>
+        <div style="color:#64748b;">위치: ${lat.toFixed(4)}, ${lng.toFixed(4)}</div>
+      </div>`;
+
+    // 1. 반경이 0보다 클 때만 폴리곤 생성 (오류 방지)
+    if (radius_km > 0) {
+      let circleFeature = turf.circle(center, radius_km, { steps: 64, units: 'kilometers' });
+      let seaPolygon = circleFeature;
+      if (landUnion) {
+        try {
+          const diff = turf.difference(circleFeature, landUnion);
+          if (diff) seaPolygon = diff;
+        } catch(e) {}
+      }
+
+      const geoLayer = L.geoJSON(seaPolygon, {
+        style: {
+          color: fillColor,
+          weight: 1.5,
+          opacity: 0.7,
+          fillColor: fillColor,
+          fillOpacity: fillOpacity
+        },
+        // 반경 영역이 클릭을 가로채지 않도록 설정 (양식장 클릭 가능해짐)
+        interactive: false
+      });
+      pollutionLayerGroup.addLayer(geoLayer);
+    }
+
+    // 2. 오염원 중심 마커는 반경과 무관하게 항상 생성 (테두리 제거됨)
+    const markerIcon = L.divIcon({
+      className: '',
+      html: `<div style="
+        width:10px;height:10px;
+        border-radius:50%;
+        background:${fillColor};
+        border:none;
+        box-shadow:0 1px 4px rgba(0,0,0,.6);
+      "></div>`,
+      iconSize: [10, 10],
+      iconAnchor: [5, 5],
+      popupAnchor: [0, -8]
+    });
+    
+    const marker = L.marker([lat, lng], { icon: markerIcon, zIndexOffset: 500 });
+    marker.bindPopup(popupHtml, { maxWidth: 220 });
+
+    pollutionLayerGroup.addLayer(marker);
+  });
+}
 
   // 기존 레이어 제거 (재호출 대비)
   if (pollutionLayerGroup) {
