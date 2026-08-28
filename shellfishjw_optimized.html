@@ -13,6 +13,10 @@
     <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;600;700&display=swap" rel="stylesheet">
     <!-- Chart.js for data visualization -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Turf.js: 오염원 영향반경 해상 클리핑에 사용 -->
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+    <!-- 육상 오염원 데이터 (매달 pollution_sources.js 파일만 수정하면 됩니다) -->
+    <script src="pollution_sources.js"></script>
     
     <style>
         * {
@@ -446,14 +450,12 @@
         #tab1 { display: none; position: relative; background: #0a1628; }
         #tab1.active { display: block; }
         #tab1 .map-wrapper, #tab1 .map-instance { width: 100%; height: 100%; }
-        /* 백색지도 전환 스위치 */
-        .basemap-switch-wrap{position:absolute;top:8px;left:8px;z-index:1300;display:flex;align-items:center;gap:8px;background:rgba(13,30,54,.92);border:1px solid #1e3a5f;border-radius:20px;padding:6px 12px 6px 10px;backdrop-filter:blur(4px);box-shadow:0 3px 12px rgba(0,0,0,.35);}
-        .basemap-switch-label{font-size:11px;color:#b8d8e8;white-space:nowrap;user-select:none;}
-        .basemap-switch{position:relative;width:42px;height:24px;border-radius:12px;background:#3a5068;cursor:pointer;transition:background .2s;flex-shrink:0;}
-        .basemap-switch.on{background:#2f6fed;}
-        .basemap-switch .knob{position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.4);transition:left .2s;}
-        .basemap-switch.on .knob{left:20px;}
-        @media (max-width:768px){.basemap-switch-wrap{top:6px;left:6px;padding:5px 10px 5px 8px;gap:6px;}.basemap-switch-label{font-size:10px;}.basemap-switch{width:38px;height:22px;}.basemap-switch .knob{width:18px;height:18px;}.basemap-switch.on .knob{left:16px;}}
+        /* 배경지도 3버튼 그룹 */
+        .basemap-btn-group{position:absolute;top:8px;left:8px;z-index:1300;display:flex;align-items:center;gap:3px;background:rgba(13,30,54,.92);border:1px solid #1e3a5f;border-radius:20px;padding:4px 5px;backdrop-filter:blur(4px);box-shadow:0 3px 12px rgba(0,0,0,.35);}
+        .basemap-btn{appearance:none;border:none;outline:none;cursor:pointer;font-size:11px;font-weight:600;color:#b8d8e8;background:transparent;border-radius:14px;padding:5px 11px;white-space:nowrap;transition:background .18s,color .18s;font-family:inherit;}
+        .basemap-btn:hover{color:#e8f4f8;background:rgba(255,255,255,.08);}
+        .basemap-btn.active{background:#2f6fed;color:#fff;}
+        @media (max-width:768px){.basemap-btn-group{top:6px;left:6px;padding:3px 4px;gap:2px;}.basemap-btn{font-size:10px;padding:4px 9px;}}
 
         .farm-search{position:absolute;top:8px;right:8px;width:50vw;max-width:360px;min-width:180px;z-index:1100;background:rgba(13,30,54,.96);border:1px solid #1e3a5f;border-radius:7px;padding:6px 8px;color:#b8d8e8;backdrop-filter:blur(4px);box-shadow:0 3px 12px rgba(0,0,0,.3);}
         .farm-search-row{display:flex;gap:4px;}
@@ -571,15 +573,11 @@
         <div id="tab1" class="tab-page active">
             <div class="map-wrapper">
                 <div id="map1" class="map-instance"></div>
-                <!-- 백색지도 전환 스위치 -->
-                <div class="basemap-switch-wrap" aria-label="배경지도 전환">
-                    <span class="basemap-switch-label">백색지도</span>
-                    <div class="basemap-switch" id="basemap-switch-1" role="switch" aria-checked="false" tabindex="0"
-                         title="흑색/백색 지도 전환"
-                         onclick="toggleBasemap1()"
-                         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleBasemap1();}">
-                        <div class="knob"></div>
-                    </div>
+                <!-- 배경지도 3버튼 그룹 -->
+                <div class="basemap-btn-group" id="basemap-btn-group-1" aria-label="배경지도 선택">
+                    <button type="button" class="basemap-btn active" data-mode="dark"   onclick="setBasemap1('dark')">흑색지도</button>
+                    <button type="button" class="basemap-btn"        data-mode="white"  onclick="setBasemap1('white')">백색지도</button>
+                    <button type="button" class="basemap-btn"        data-mode="satellite" onclick="setBasemap1('satellite')">위성지도</button>
                 </div>
                 <div class="farm-search" id="farm-search">
                     <div class="farm-search-row">
@@ -1606,34 +1604,39 @@ let baseLayers1 = null;
 let basemapMode1 = 'dark';
 
 function buildBaseLayers1() {
-  const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; CARTO &nbsp;|&nbsp; 양식장: 해양수산부 국립해양조사원', maxZoom: 19
-  });
+  const dark = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    { attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ | 양식장: 해양수산부 국립해양조사원', maxZoom: 16 }
+  );
   const white = L.tileLayer(
     `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY_JW}/white/{z}/{y}/{x}.png`,
-    { attribution: '&copy; VWorld (국토교통부 국토정보플랫폼) &nbsp;|&nbsp; 양식장: 해양수산부 국립해양조사원', maxZoom: 19, minZoom: 6 }
+    { attribution: '&copy; VWorld (국토교통부 국토정보플랫폼) | 양식장: 해양수산부 국립해양조사원', maxZoom: 19, minZoom: 6 }
   );
-  return { dark, white };
+  const satellite = L.tileLayer(
+    `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY_JW}/Satellite/{z}/{y}/{x}.jpeg`,
+    { attribution: '&copy; VWorld (국토교통부 국토정보플랫폼) 위성영상 | 양식장: 해양수산부 국립해양조사원', maxZoom: 19, minZoom: 6 }
+  );
+  return { dark, white, satellite };
 }
 
-function toggleBasemap1() {
+function setBasemap1(mode) {
   if (!map1 || !baseLayers1) return;
-  const sw = document.getElementById('basemap-switch-1');
-  const goWhite = basemapMode1 !== 'white';
-  if (goWhite) {
-    if (map1.hasLayer(baseLayers1.dark)) map1.removeLayer(baseLayers1.dark);
-    baseLayers1.white.addTo(map1);
-    basemapMode1 = 'white';
-  } else {
-    if (map1.hasLayer(baseLayers1.white)) map1.removeLayer(baseLayers1.white);
-    baseLayers1.dark.addTo(map1);
-    basemapMode1 = 'dark';
-  }
-  if (sw) {
-    sw.classList.toggle('on', goWhite);
-    sw.setAttribute('aria-checked', String(goWhite));
-  }
+  if (basemapMode1 === mode) return;
+  // 현재 레이어 제거
+  Object.values(baseLayers1).forEach(layer => {
+    if (map1.hasLayer(layer)) map1.removeLayer(layer);
+  });
+  // 선택 레이어 추가
+  baseLayers1[mode].addTo(map1);
+  basemapMode1 = mode;
+  // 버튼 활성화 상태 갱신
+  document.querySelectorAll('#basemap-btn-group-1 .basemap-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
 }
+
+// 하위호환 (혹시 외부에서 호출되는 경우 대비)
+function toggleBasemap1() { setBasemap1(basemapMode1 === 'dark' ? 'white' : 'dark'); }
 
 function initMap1() {
   map1 = L.map('map1', { preferCanvas: true, center: [35.9, 127.7], zoom: 7, zoomControl: false });
@@ -1654,8 +1657,115 @@ function initMap1() {
   initFarmRegionSelect();
   document.getElementById('farm-loading').style.display = 'none';
   rebuildFarmLayer();
+
+  // 오염원 영향반경 렌더링
+  renderPollutionLayers(map1);
 }
 
+
+// ══════════════════════════════════════════════
+//  오염원 영향반경 (해상 클리핑)
+// ══════════════════════════════════════════════
+//
+// pollution_sources.js 에서 window.POLLUTION_SOURCES 배열을 주입합니다.
+// Turf.js의 circle + difference 를 이용해 육상 부분을 잘라냅니다.
+// 한국 해안선은 간략화된 GeoJSON을 내장합니다(별도 파일 불필요).
+//
+// ── 한국 육상 경계 (간략화 MultiPolygon) ──────────────────
+// Natural Earth 10m 기반으로 한반도+제주 주요 도서를 포함합니다.
+// 세부 해안선은 클리핑 정밀도와 용량의 균형을 맞춰 단순화했습니다.
+const KOREA_LAND_GEOJSON = {"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"한반도"},"geometry":{"type":"MultiPolygon","coordinates":[[[[124.61,37.94],[124.72,37.63],[125.02,37.67],[125.37,37.84],[125.68,37.93],[126.00,37.62],[126.12,37.22],[126.37,36.93],[126.54,36.70],[126.63,36.47],[126.52,36.26],[126.35,36.12],[126.65,36.05],[126.85,35.66],[126.79,35.42],[126.90,35.24],[127.01,34.94],[127.27,34.64],[127.57,34.60],[127.86,34.76],[128.05,35.03],[128.46,35.05],[128.77,35.09],[128.98,35.31],[129.21,35.48],[129.35,35.64],[129.38,35.85],[129.45,36.05],[129.48,36.28],[129.42,36.58],[129.38,36.82],[129.42,37.06],[129.36,37.30],[129.20,37.60],[129.13,37.80],[128.96,38.07],[128.63,38.34],[128.37,38.49],[128.08,38.61],[127.77,38.62],[127.47,38.72],[127.14,38.61],[126.89,38.36],[126.58,38.20],[126.30,38.05],[125.98,37.98],[125.60,38.06],[125.30,38.03],[124.96,38.11],[124.78,38.03],[124.61,37.94]]]]}},{"type":"Feature","properties":{"name":"제주도"},"geometry":{"type":"Polygon","coordinates":[[[126.15,33.19],[126.55,33.10],[126.97,33.12],[127.24,33.30],[127.27,33.50],[126.97,33.63],[126.57,33.65],[126.19,33.53],[125.98,33.38],[126.15,33.19]]]}},{"type":"Feature","properties":{"name":"진도"},"geometry":{"type":"Polygon","coordinates":[[[126.12,34.38],[126.31,34.28],[126.41,34.40],[126.32,34.53],[126.14,34.53],[126.12,34.38]]]}},{"type":"Feature","properties":{"name":"거제도"},"geometry":{"type":"Polygon","coordinates":[[[128.52,34.78],[128.72,34.71],[128.88,34.80],[128.91,34.95],[128.76,35.06],[128.57,35.05],[128.46,34.93],[128.52,34.78]]]}},{"type":"Feature","properties":{"name":"남해도"},"geometry":{"type":"Polygon","coordinates":[[[127.65,34.69],[127.91,34.63],[128.07,34.73],[128.07,34.87],[127.87,34.93],[127.64,34.85],[127.65,34.69]]]}},{"type":"Feature","properties":{"name":"강화도"},"geometry":{"type":"Polygon","coordinates":[[[126.32,37.62],[126.54,37.56],[126.65,37.66],[126.57,37.78],[126.38,37.78],[126.30,37.70],[126.32,37.62]]]}}]};
+
+let pollutionLayerGroup = null;
+
+function renderPollutionLayers(map) {
+  // pollution_sources.js 가 로드되지 않았거나 데이터가 없으면 조용히 종료
+  const sources = window.POLLUTION_SOURCES;
+  if (!sources || !sources.length) return;
+  if (typeof turf === 'undefined') {
+    console.warn('[오염원] Turf.js 미로드 — 영향반경을 표시할 수 없습니다.');
+    return;
+  }
+
+  // 기존 레이어 제거 (재호출 대비)
+  if (pollutionLayerGroup) {
+    map.removeLayer(pollutionLayerGroup);
+  }
+  pollutionLayerGroup = L.layerGroup().addTo(map);
+
+  // 육상 union geometry (클리핑용)
+  let landUnion = null;
+  try {
+    KOREA_LAND_GEOJSON.features.forEach(f => {
+      landUnion = landUnion ? turf.union(landUnion, f) : f;
+    });
+  } catch(e) {
+    console.warn('[오염원] 육상 경계 union 실패:', e);
+  }
+
+  sources.forEach(src => {
+    const { name, lat, lng, radius_km, color, opacity } = src;
+    const center = [lng, lat]; // turf는 [lng, lat]
+    const fillColor  = color   || '#e74c3c';
+    const fillOpacity = opacity != null ? opacity : 0.35;
+
+    // turf로 반경 원 생성 (64각형 근사)
+    let circleFeature = turf.circle(center, radius_km, { steps: 64, units: 'kilometers' });
+
+    // 육상 부분 제거: difference(원, 육상)
+    let seaPolygon = circleFeature;
+    if (landUnion) {
+      try {
+        const diff = turf.difference(circleFeature, landUnion);
+        if (diff) seaPolygon = diff;
+      } catch(e) {
+        // difference 실패 시 원본 원 사용 (육상 클리핑 생략)
+        console.warn(`[오염원] ${name} 클리핑 실패, 원본 사용:`, e);
+      }
+    }
+
+    // Leaflet GeoJSON으로 렌더
+    const geoLayer = L.geoJSON(seaPolygon, {
+      style: {
+        color: fillColor,
+        weight: 1.5,
+        opacity: 0.7,
+        fillColor: fillColor,
+        fillOpacity: fillOpacity
+      },
+      interactive: true
+    });
+
+    // 오염원 마커 (중심점)
+    const markerIcon = L.divIcon({
+      className: '',
+      html: `<div style="
+        width:10px;height:10px;
+        border-radius:50%;
+        background:${fillColor};
+        border:2px solid #fff;
+        box-shadow:0 1px 4px rgba(0,0,0,.6);
+      "></div>`,
+      iconSize: [10, 10],
+      iconAnchor: [5, 5],
+      popupAnchor: [0, -8]
+    });
+    const marker = L.marker([lat, lng], { icon: markerIcon, zIndexOffset: 500 });
+
+    // 팝업 (클릭 시)
+    const popupHtml = `
+      <div style="min-width:140px;font-size:12px;line-height:1.7;">
+        <div style="font-weight:700;font-size:13px;margin-bottom:4px;">${name}</div>
+        <div style="color:#64748b;">영향반경: <b style="color:#e74c3c;">${radius_km} km</b></div>
+        <div style="color:#64748b;">위치: ${lat.toFixed(4)}, ${lng.toFixed(4)}</div>
+      </div>`;
+    geoLayer.bindPopup(popupHtml, { maxWidth: 220 });
+    marker.bindPopup(popupHtml, { maxWidth: 220 });
+
+    pollutionLayerGroup.addLayer(geoLayer);
+    pollutionLayerGroup.addLayer(marker);
+  });
+}
 
 
 // ══════════════════════════════════════════════
