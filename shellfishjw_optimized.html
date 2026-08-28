@@ -1669,7 +1669,32 @@ function initMap1() {
   // 오염원 영향반경 렌더링
   renderPollutionLayers(map1);
 }
-
+// ══════════════════════════════════════════════
+//  오염원 레이어 온오프 토글 함수 추가
+// ══════════════════════════════════════════════
+function togglePollutionLayer() {
+    // 맵이나 오염원 그룹이 초기화되지 않았다면 무시
+    if (!map1 || !pollutionLayerGroup) return;
+    
+    const btn = document.getElementById('pollution-toggle-btn');
+    
+    // 현재 지도에 오염원 레이어가 켜져 있는 경우 -> 끄기
+    if (map1.hasLayer(pollutionLayerGroup)) {
+        map1.removeLayer(pollutionLayerGroup);
+        btn.classList.remove('active');
+        btn.style.background = 'transparent';
+        btn.style.color = '#e74c3c';
+        btn.innerHTML = '<i class="fa-solid fa-droplet-slash"></i> 오염원 표시 OFF';
+    } 
+    // 현재 지도에 오염원 레이어가 꺼져 있는 경우 -> 켜기
+    else {
+        map1.addLayer(pollutionLayerGroup);
+        btn.classList.add('active');
+        btn.style.background = '#e74c3c';
+        btn.style.color = '#fff';
+        btn.innerHTML = '<i class="fa-solid fa-droplet"></i> 오염원 표시 ON';
+    }
+}
 
 // ══════════════════════════════════════════════
 //  오염원 영향반경 (해상 클리핑)
